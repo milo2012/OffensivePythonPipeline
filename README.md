@@ -18,6 +18,16 @@ Build standalone **Python 3** binaries for popular offensive security tools, com
 - PCredz
 - SMBMap
 
+## Screenshots
+
+### Main Menu
+
+![Main Menu](images/main.png)
+
+### Building a Binary
+
+![Build Process](images/build.png)
+  
 ## Build
 
 ```bash
