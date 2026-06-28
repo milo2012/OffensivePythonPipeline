@@ -49,4 +49,4 @@ The pipeline generates standalone Python binaries that can be deployed on Linux 
 Precompiled standalone binaries are available from the Internet Archive.
 
 **Download:**  
-https://archive.org/details/@keith358/lists/1/offensivepythonpipeline
+https://archive.org/details/OffensivePythonPipeline

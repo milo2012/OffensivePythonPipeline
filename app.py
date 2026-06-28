@@ -128,6 +128,56 @@ PRESETS = {
             "struct", "binascii", "base64", "re",
         ],
     },
+    "sccmsecrets": {
+        "label": "SCCMSecrets",
+        "author": "synacktiv",
+        "build_type": "git",
+        "repo": "https://github.com/synacktiv/SCCMSecrets.git",
+        "spec": None,
+        "name": "SCCMSecrets",
+        "versions": [
+            {"version": "latest", "label": "Latest (master)"},
+        ],
+        "hidden_imports": [
+            "requests", "typer", "bs4", "cryptography",
+            "requests_ntlm", "requests_toolbelt", "pyasn1_modules",
+            "cryptography.hazmat", "cryptography.hazmat.primitives",
+            "cryptography.hazmat.primitives.asymmetric",
+            "cryptography.hazmat.backends",
+            "click", "rich", "rich.console", "rich.markup",
+            "pkg_resources", "setuptools",
+        ],
+        "collect_all": ["typer", "rich", "bs4", "requests_ntlm", "requests_toolbelt", "pyasn1_modules"],
+    },
+    "sccmhunter": {
+        "label": "SCCMHunter",
+        "author": "garrettfoster13",
+        "build_type": "git",
+        "repo": "https://github.com/garrettfoster13/sccmhunter.git",
+        "spec": None,
+        "name": "sccmhunter",
+        "versions": [
+            {"version": "latest", "label": "Latest (main)"},
+        ],
+        "hidden_imports": [
+            "impacket", "impacket.examples", "impacket.examples.ntlmrelayx",
+            "impacket.examples.ntlmrelayx.attacks", "impacket.examples.ntlmrelayx.clients",
+            "impacket.examples.ntlmrelayx.servers", "impacket.examples.ntlmrelayx.utils",
+            "ldap3", "ldap3.core", "ldap3.core.connection", "ldap3.core.server",
+            "ldap3.core.tls", "ldap3.protocol", "ldap3.protocol.rfc4511",
+            "ldap3.strategy", "ldap3.strategy.sync", "ldap3.strategy.asyncio",
+            "ldap3.utils", "ldap3.utils.conv", "ldap3.utils.dn",
+            "pandas", "pyasn1", "pyasn1_modules",
+            "requests", "requests_ntlm", "requests_toolbelt",
+            "rich", "rich.console", "rich.markup", "rich.table",
+            "tabulate", "typer", "urllib3", "OpenSSL", "OpenSSL.SSL", "OpenSSL.crypto",
+            "cryptography", "cryptography.hazmat", "cryptography.hazmat.primitives",
+            "cryptography.hazmat.backends", "cryptography.x509",
+            "certifi",
+            "pkg_resources", "setuptools",
+        ],
+        "collect_all": ["impacket", "typer", "rich", "ldap3", "pandas", "requests_ntlm", "requests_toolbelt", "certifi", "OpenSSL"],
+    },
     "smbmap": {
         "label": "SMBMap",
         "author": "ShawnDEvans",
@@ -194,6 +244,10 @@ def run_build(job_id, preset_key, version, custom_pip, custom_entry, custom_name
                     _run_responder_build(cfg, version, workdir, run, log)
                 elif preset_key == "pcredz":
                     _run_pcredz_build(cfg, version, workdir, run, log)
+                elif preset_key == "sccmsecrets":
+                    _run_sccmsecrets_build(cfg, version, workdir, run, log)
+                elif preset_key == "sccmhunter":
+                    _run_sccmhunter_build(cfg, version, workdir, run, log)
                 else:
                     _run_git_build(cfg, version, workdir, run, log)
             else:
@@ -627,6 +681,158 @@ def _run_responder_build(cfg, version, workdir, run, log):
 
     if succeeded:
         _glibc_check(str(dist_dir / succeeded[0]), log)
+
+
+def _run_sccmhunter_build(cfg, version, workdir, run, log):
+    job_id = workdir.name
+    repo_dir = workdir / "repo"
+
+    log(f"==> Cloning {cfg['repo']} ...")
+    run(["git", "clone", "--depth=1", cfg["repo"], str(repo_dir)])
+
+    if version and version != "latest":
+        log(f"==> Checking out {version} ...")
+        run(["git", "fetch", "--tags"], cwd=str(repo_dir))
+        run(["git", "checkout", version], cwd=str(repo_dir))
+
+    log("==> Installing SCCMHunter dependencies ...")
+    req_file = repo_dir / "requirements.txt"
+    if req_file.exists():
+        run(["python3.12", "-m", "pip", "install", "-r", str(req_file)])
+    run(["python3.12", "-m", "pip", "install", "pyinstaller", "pyopenssl", "certifi"])
+
+    # Patch: disable ldap3 referral chasing so LDAPSocketOpenError on referrals
+    # doesn't propagate as an unhandled exception and crash the frozen binary.
+    # ldap3 follows referrals by default; when the referral target is unreachable
+    # the exception bubbles through paged_search_generator -> check_schema -> run
+    # and kills the process. Setting AUTO_REFERRALS = False in the ldap3 package
+    # globals, and wrapping paged_search calls with a try/except in any lib file
+    # that uses it, is the cleanest cross-version fix without modifying sccmhunter
+    # source itself.
+    log("==> Patching ldap3 to disable referral chasing ...")
+    import subprocess as _sp
+    ldap3_core = _sp.run(
+        ["python3.12", "-c", "import ldap3, os; print(os.path.dirname(ldap3.__file__))"],
+        capture_output=True, text=True
+    ).stdout.strip()
+    if ldap3_core:
+        globals_path = Path(ldap3_core) / "core" / "connection.py"
+        if globals_path.exists():
+            src = globals_path.read_text()
+            # Patch the Connection constructor to always set auto_referrals=False
+            # when not explicitly set, by replacing the default parameter value.
+            if "auto_referrals=True" in src and "# sccmhunter-patched" not in src:
+                patched = src.replace(
+                    "auto_referrals=True",
+                    "auto_referrals=False"
+                ).replace(
+                    "# sccmhunter-patched", ""  # ensure no stale marker
+                )
+                # Add a marker comment on its own line at the top so we can detect re-runs
+                patched = "# sccmhunter-patched\n" + patched
+                globals_path.write_text(patched)
+                log(f"==> Patched ldap3 auto_referrals=False in {globals_path}")
+            else:
+                log("==> ldap3 connection.py already patched or pattern not found, skipping")
+        else:
+            log(f"==> WARNING: Could not find ldap3 connection.py at {globals_path}")
+    else:
+        log("==> WARNING: Could not locate ldap3 package path, skipping patch")
+
+    dist_dir = workdir / "dist"
+    dist_dir.mkdir(exist_ok=True)
+    build_dir = workdir / "build"
+
+    entry_script = repo_dir / "sccmhunter.py"
+    if not entry_script.exists():
+        raise FileNotFoundError("sccmhunter.py not found in repo root")
+
+    hidden_imports = cfg.get("hidden_imports", [])
+    collect_all = cfg.get("collect_all", [])
+
+    # Collect any lib/ or sccmhunter/ subdirectories so internal modules resolve
+    extra_paths = [str(repo_dir)]
+    for subdir in ["lib", "sccmhunter", "utils"]:
+        p = repo_dir / subdir
+        if p.is_dir():
+            extra_paths.append(str(p))
+
+    cmd = [
+        "python3.12", "-m", "PyInstaller",
+        "--onefile",
+        "--name=sccmhunter",
+        f"--distpath={dist_dir}",
+        f"--workpath={build_dir}",
+        f"--specpath={workdir}",
+        "--clean",
+    ]
+    for ep in extra_paths:
+        cmd += [f"--paths={ep}"]
+    for hi in hidden_imports:
+        cmd += [f"--hidden-import={hi}"]
+    for ca in collect_all:
+        cmd += [f"--collect-all={ca}"]
+    cmd += ["--collect-data=certifi"]
+    cmd.append(str(entry_script))
+
+    log("==> Building SCCMHunter binary ...")
+    run(cmd)
+
+    _finalize_build("sccmhunter", dist_dir, job_id, log)
+
+
+def _run_sccmsecrets_build(cfg, version, workdir, run, log):
+    job_id = workdir.name
+    repo_dir = workdir / "repo"
+
+    log(f"==> Cloning {cfg['repo']} ...")
+    run(["git", "clone", "--depth=1", cfg["repo"], str(repo_dir)])
+
+    if version and version != "latest":
+        log(f"==> Checking out {version} ...")
+        run(["git", "fetch", "--tags"], cwd=str(repo_dir))
+        run(["git", "checkout", version], cwd=str(repo_dir))
+
+    log("==> Installing SCCMSecrets dependencies ...")
+    req_file = repo_dir / "requirements.txt"
+    if req_file.exists():
+        run(["python3.12", "-m", "pip", "install", "-r", str(req_file)])
+    run(["python3.12", "-m", "pip", "install", "pyinstaller"])
+
+    dist_dir = workdir / "dist"
+    dist_dir.mkdir(exist_ok=True)
+    build_dir = workdir / "build"
+
+    # SCCMSecrets has multiple .py files that import from each other —
+    # bundle the main entrypoint (SCCMSecrets.py) and collect the sibling
+    # modules via --paths so PyInstaller can resolve them.
+    entry_script = repo_dir / "SCCMSecrets.py"
+    if not entry_script.exists():
+        raise FileNotFoundError("SCCMSecrets.py not found in repo root")
+
+    hidden_imports = cfg.get("hidden_imports", [])
+    collect_all = cfg.get("collect_all", [])
+
+    cmd = [
+        "python3.12", "-m", "PyInstaller",
+        "--onefile",
+        "--name=SCCMSecrets",
+        f"--distpath={dist_dir}",
+        f"--workpath={build_dir}",
+        f"--specpath={workdir}",
+        "--clean",
+        f"--paths={repo_dir}",
+    ]
+    for hi in hidden_imports:
+        cmd += [f"--hidden-import={hi}"]
+    for ca in collect_all:
+        cmd += [f"--collect-all={ca}"]
+    cmd.append(str(entry_script))
+
+    log("==> Building SCCMSecrets binary ...")
+    run(cmd)
+
+    _finalize_build("SCCMSecrets", dist_dir, job_id, log)
 
 
 def _glibc_check(binary_path, log):
