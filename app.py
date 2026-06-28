@@ -6,6 +6,8 @@ import json
 import urllib.request
 import zipfile
 import re
+import ast
+import sys
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, send_file, Response, stream_with_context
 
@@ -1000,6 +1002,139 @@ def get_versions(preset_key):
             "versions": cfg.get("versions", [{"version": "latest", "label": "Latest", "verified": False}]),
             "error": str(e)
         })
+
+
+
+_STDLIB = set(sys.stdlib_module_names) if hasattr(sys, "stdlib_module_names") else set()
+
+
+def _detect_imports(source_code):
+    """Parse a .py AST and return third-party top-level import names."""
+    try:
+        tree = ast.parse(source_code)
+    except SyntaxError:
+        return []
+    imports = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imports.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module and node.level == 0:
+                imports.add(node.module.split(".")[0])
+    skip = _STDLIB | {"__future__", "_thread", "builtins"}
+    return sorted(imp for imp in imports if imp not in skip)
+
+
+@app.route("/analyze", methods=["POST"])
+def analyze_script():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    f = request.files["file"]
+    filename = f.filename or ""
+    if not filename.endswith(".py"):
+        return jsonify({"error": "Only .py files are supported"}), 400
+    source = f.read().decode("utf-8", errors="replace")
+    binary_name = Path(filename).stem
+    detected = _detect_imports(source)
+    return jsonify({
+        "binary_name": binary_name,
+        "detected_imports": detected,
+        "source_size": len(source),
+        "filename": filename,
+    })
+
+
+@app.route("/build-script", methods=["POST"])
+def start_script_build():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    f = request.files["file"]
+    filename = f.filename or "script.py"
+    packages = request.form.get("packages", "").strip()
+    binary_name = request.form.get("binary_name", "").strip() or Path(filename).stem
+    binary_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", binary_name)
+    source = f.read().decode("utf-8", errors="replace")
+    pkg_list = [p.strip() for p in packages.split(",") if p.strip()]
+
+    job_id = str(uuid.uuid4())
+    with jobs_lock:
+        jobs[job_id] = {"log": [], "status": "running", "binary": None}
+
+    t = threading.Thread(
+        target=_run_script_build,
+        args=(job_id, source, filename, pkg_list, binary_name),
+        daemon=True,
+    )
+    t.start()
+    return jsonify({"job_id": job_id})
+
+
+def _run_script_build(job_id, source, filename, packages, binary_name):
+    def log(msg):
+        with jobs_lock:
+            jobs[job_id]["log"].append(msg)
+
+    try:
+        workdir = BUILDS_DIR / job_id
+        workdir.mkdir(parents=True, exist_ok=True)
+
+        def run(cmd, cwd=None):
+            log(f"$ {' '.join(str(c) for c in cmd)}")
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, cwd=cwd
+            )
+            for line in proc.stdout:
+                log(line.rstrip())
+            proc.wait()
+            if proc.returncode != 0:
+                raise RuntimeError(f"Command failed with code {proc.returncode}")
+
+        script_path = workdir / filename
+        script_path.write_text(source)
+        log(f"==> Script saved: {filename} ({len(source)} bytes)")
+
+        if packages:
+            log(f"==> Installing packages: {', '.join(packages)}")
+            run(["python3.12", "-m", "pip", "install"] + packages)
+        else:
+            log("==> No third-party packages to install")
+
+        run(["python3.12", "-m", "pip", "install", "pyinstaller"])
+
+        dist_dir = workdir / "dist"
+        dist_dir.mkdir(exist_ok=True)
+        build_dir = workdir / "build"
+
+        hidden_imports = []
+        for pkg in packages:
+            hidden_imports.append(pkg)
+            hidden_imports.append(pkg.replace("-", "_"))
+
+        cmd = [
+            "python3.12", "-m", "PyInstaller",
+            "--onefile",
+            f"--name={binary_name}",
+            f"--distpath={dist_dir}",
+            f"--workpath={build_dir}",
+            f"--specpath={workdir}",
+            "--clean",
+            f"--paths={workdir}",
+        ]
+        for hi in set(hidden_imports):
+            cmd += [f"--hidden-import={hi}"]
+        cmd.append(str(script_path))
+
+        log(f"==> Building {binary_name} binary ...")
+        run(cmd)
+
+        _finalize_build(binary_name, dist_dir, job_id, log)
+
+    except Exception as e:
+        log(f"==> ERROR: {e}")
+        with jobs_lock:
+            jobs[job_id]["status"] = "error"
 
 
 if __name__ == "__main__":

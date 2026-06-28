@@ -223,6 +223,34 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.6; }
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--s4); border-radius: 4px; }
+
+/* ── Upload drop zone ── */
+.drop-zone {
+  border: 2px dashed var(--border-hi); border-radius: var(--radius);
+  padding: 36px 20px; text-align: center; cursor: pointer;
+  transition: border-color 0.15s, background 0.15s; position: relative;
+}
+.drop-zone:hover, .drop-zone.drag-over { border-color: var(--accent); background: var(--accent-bg); }
+.drop-zone input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+.drop-icon { font-size: 28px; color: var(--t3); margin-bottom: 8px; }
+.drop-label { font-size: 13px; color: var(--t2); }
+.drop-sub { font-size: 11px; color: var(--t3); margin-top: 4px; }
+.drop-filename { display: none; align-items: center; gap: 8px; background: var(--s3); border-radius: var(--radius); padding: 8px 12px; font-size: 12px; font-family: var(--mono); color: var(--t1); margin-top: 10px; }
+.drop-filename.show { display: flex; }
+.drop-filename .df-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drop-filename .df-size { color: var(--t3); flex-shrink: 0; }
+.drop-filename .df-clear { background: none; border: none; color: var(--t3); cursor: pointer; font-size: 14px; padding: 0 2px; line-height: 1; }
+.drop-filename .df-clear:hover { color: var(--err); }
+.pkg-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 34px; }
+.pkg-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px 3px 10px; border-radius: 20px; border: 1px solid var(--border-hi); background: var(--s3); color: var(--t2); font-size: 12px; font-family: var(--mono); }
+.pkg-chip .pc-rm { background: none; border: none; color: var(--t3); cursor: pointer; font-size: 13px; padding: 0; line-height: 1; margin-left: 2px; }
+.pkg-chip .pc-rm:hover { color: var(--err); }
+.pkg-add-row { display: flex; gap: 6px; margin-top: 6px; }
+.pkg-add-row input { flex: 1; }
+.btn-sm { display: inline-flex; align-items: center; gap: 4px; background: var(--s3); color: var(--t2); border: 1px solid var(--border-md); border-radius: var(--radius); padding: 5px 10px; font-size: 12px; font-family: inherit; cursor: pointer; white-space: nowrap; }
+.btn-sm:hover { background: var(--s4); color: var(--t1); }
+.analyze-hint { font-size: 11px; color: var(--t3); margin-top: 6px; font-style: italic; }
+.upload-body { display: none; flex-direction: column; gap: 16px; }
 </style>
 </head>
 <body>
@@ -262,6 +290,13 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.6; }
         <span class="ni-info">
           <div class="ni-name">Custom project</div>
           <div class="ni-sub">specify manually</div>
+        </span>
+      </button>
+      <button class="nav-item" data-key="upload" onclick="selectPreset('upload')">
+        <span class="ni-icon"><i class="ti ti-upload" aria-hidden="true"></i></span>
+        <span class="ni-info">
+          <div class="ni-name">Upload script</div>
+          <div class="ni-sub">any .py file</div>
         </span>
       </button>
     </div>
@@ -346,6 +381,58 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.6; }
       </div>
     </div>
 
+
+    <!-- Upload script panel -->
+    <div class="config" id="upload-panel" style="display:none">
+      <div class="config-head">
+        <div class="config-head-row">
+          <span class="config-title">Upload script</span>
+          <span class="config-type-badge">upload</span>
+        </div>
+        <div class="config-author">Drag &amp; drop or browse a .py file &mdash; dependencies are auto-detected</div>
+      </div>
+      <div class="config-body">
+        <div class="field-group">
+          <div class="field-label"><i class="ti ti-file-upload" style="font-size:12px"></i> Python script</div>
+          <div class="drop-zone" id="drop-zone">
+            <input type="file" id="upload-file" accept=".py" onchange="handleFileSelect(this.files[0])">
+            <div class="drop-icon"><i class="ti ti-cloud-upload"></i></div>
+            <div class="drop-label">Drop your .py file here</div>
+            <div class="drop-sub">or click to browse</div>
+          </div>
+          <div class="drop-filename" id="drop-filename">
+            <i class="ti ti-file-code" style="color:var(--accent);font-size:14px"></i>
+            <span class="df-name" id="df-name"></span>
+            <span class="df-size" id="df-size"></span>
+            <button class="df-clear" onclick="clearUpload()" title="Remove">&times;</button>
+          </div>
+        </div>
+        <div class="upload-body" id="upload-body">
+          <div class="field-group">
+            <div class="field-label"><i class="ti ti-terminal" style="font-size:12px"></i> Binary name</div>
+            <input type="text" id="u-name" placeholder="e.g. mytool" />
+          </div>
+          <div class="field-group">
+            <div class="field-label">
+              <i class="ti ti-package" style="font-size:12px"></i> Packages to install
+              <span id="analyze-status" style="font-size:10px;color:var(--t3);margin-left:6px;font-weight:400;text-transform:none;letter-spacing:0"></span>
+            </div>
+            <div class="pkg-chips" id="pkg-chips"></div>
+            <div class="pkg-add-row">
+              <input type="text" id="pkg-add-input" placeholder="add package..." onkeydown="if(event.key==='Enter')addPkg()" style="font-size:12px;padding:5px 8px">
+              <button class="btn-sm" onclick="addPkg()"><i class="ti ti-plus" style="font-size:11px"></i> Add</button>
+            </div>
+            <div class="analyze-hint" id="analyze-hint"></div>
+          </div>
+        </div>
+      </div>
+      <div class="build-foot">
+        <button class="btn-primary" id="upload-build-btn" onclick="startScriptBuild()" disabled>
+          <i class="ti ti-player-play" style="font-size:12px"></i> Start build
+        </button>
+        <span class="build-hint" id="upload-hint">Upload a .py file to continue</span>
+      </div>
+    </div>
   </main>
 </div>
 
@@ -504,6 +591,162 @@ function streamLog(jobId) {
       }
     }
   };
+}
+</script>
+
+<script>
+let uploadFile = null;
+let uploadPkgs = [];
+
+const _origSelectPreset = selectPreset;
+selectPreset = function(key) {
+  document.getElementById('upload-panel').style.display = 'none';
+  if (key === 'upload') {
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+    document.querySelector('.nav-item[data-key="upload"]').classList.add('active');
+    document.getElementById('empty').style.display = 'none';
+    document.getElementById('logpanel').style.display = 'none';
+    document.getElementById('config').style.display = 'none';
+    document.getElementById('upload-panel').style.display = 'flex';
+    return;
+  }
+  _origSelectPreset(key);
+};
+
+const _origGoBack = goBack;
+goBack = function() {
+  if (document.getElementById('upload-panel').dataset.wasActive) {
+    document.getElementById('logpanel').style.display = 'none';
+    document.getElementById('upload-panel').style.display = 'flex';
+    delete document.getElementById('upload-panel').dataset.wasActive;
+    document.getElementById('back-btn').style.display = 'none';
+    document.getElementById('upload-build-btn').disabled = false;
+    return;
+  }
+  _origGoBack();
+};
+
+const dz = document.getElementById('drop-zone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+dz.addEventListener('drop', e => {
+  e.preventDefault(); dz.classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (f) handleFileSelect(f);
+});
+
+function handleFileSelect(file) {
+  if (!file || !file.name.endsWith('.py')) { alert('Please select a .py file'); return; }
+  uploadFile = file;
+  document.getElementById('df-name').textContent = file.name;
+  document.getElementById('df-size').textContent = formatBytes(file.size);
+  document.getElementById('drop-filename').classList.add('show');
+  document.getElementById('u-name').value = file.name.replace(/\.py$/, '');
+  document.getElementById('upload-body').style.display = 'flex';
+  document.getElementById('upload-build-btn').disabled = false;
+  document.getElementById('upload-hint').textContent = 'Review packages then start build';
+  analyzeScript(file);
+}
+
+function clearUpload() {
+  uploadFile = null; uploadPkgs = [];
+  document.getElementById('upload-file').value = '';
+  document.getElementById('drop-filename').classList.remove('show');
+  document.getElementById('upload-body').style.display = 'none';
+  document.getElementById('upload-build-btn').disabled = true;
+  document.getElementById('upload-hint').textContent = 'Upload a .py file to continue';
+  document.getElementById('u-name').value = '';
+  document.getElementById('analyze-status').textContent = '';
+  document.getElementById('analyze-hint').textContent = '';
+  renderPkgChips();
+}
+
+function analyzeScript(file) {
+  const status = document.getElementById('analyze-status');
+  const hint = document.getElementById('analyze-hint');
+  status.textContent = '⟳ Analyzing...';
+  hint.textContent = '';
+  uploadPkgs = [];
+  renderPkgChips();
+
+  const fd = new FormData();
+  fd.append('file', file);
+
+  fetch('/analyze', { method: 'POST', body: fd })
+    .then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(d => {
+      if (d.error) { status.textContent = '⚠ ' + d.error; return; }
+      uploadPkgs = d.detected_imports || [];
+      renderPkgChips();
+      if (uploadPkgs.length) {
+        status.textContent = '✓ ' + uploadPkgs.length + ' package' + (uploadPkgs.length > 1 ? 's' : '') + ' detected';
+        hint.textContent = 'Auto-detected from import statements. Remove any stdlib modules or add extras.';
+      } else {
+        status.textContent = '✓ No third-party imports detected';
+        hint.textContent = 'Add packages manually if needed.';
+      }
+    })
+    .catch(err => { status.textContent = '⚠ Analysis failed: ' + err.message; });
+}
+
+function renderPkgChips() {
+  const wrap = document.getElementById('pkg-chips');
+  wrap.innerHTML = '';
+  if (!uploadPkgs.length) {
+    wrap.innerHTML = '<span style="font-size:12px;color:var(--t3);font-style:italic">No packages — add manually if needed</span>';
+    return;
+  }
+  uploadPkgs.forEach((pkg, i) => {
+    const chip = document.createElement('span');
+    chip.className = 'pkg-chip';
+    chip.innerHTML = pkg + '<button class="pc-rm" onclick="removePkg(' + i + ')" title="Remove">×</button>';
+    wrap.appendChild(chip);
+  });
+}
+
+function removePkg(i) { uploadPkgs.splice(i, 1); renderPkgChips(); }
+
+function addPkg() {
+  const inp = document.getElementById('pkg-add-input');
+  const val = inp.value.trim();
+  if (val && !uploadPkgs.includes(val)) { uploadPkgs.push(val); renderPkgChips(); }
+  inp.value = '';
+}
+
+function startScriptBuild() {
+  if (!uploadFile) return;
+  const binaryName = document.getElementById('u-name').value.trim() || uploadFile.name.replace(/\.py$/, '');
+  document.getElementById('log-name').textContent = binaryName + ' · script';
+  document.getElementById('log-body').innerHTML = '';
+  document.getElementById('dl-btn').style.display = 'none';
+  document.getElementById('back-btn').style.display = 'none';
+  document.getElementById('foot-status').textContent = '';
+  document.getElementById('foot-status').style.color = 'var(--t3)';
+  document.getElementById('pulse').style.display = 'block';
+  document.getElementById('log-status-txt').textContent = 'Running...';
+  document.getElementById('log-status-txt').style.color = 'var(--t2)';
+  document.getElementById('upload-build-btn').disabled = true;
+  document.getElementById('upload-panel').dataset.wasActive = '1';
+  document.getElementById('upload-panel').style.display = 'none';
+  document.getElementById('logpanel').style.display = 'flex';
+
+  const fd = new FormData();
+  fd.append('file', uploadFile);
+  fd.append('packages', uploadPkgs.join(','));
+  fd.append('binary_name', binaryName);
+
+  fetch('/build-script', { method: 'POST', body: fd })
+    .then(r => r.json())
+    .then(d => streamLog(d.job_id));
+}
+
+function formatBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  return (b/1048576).toFixed(1) + ' MB';
 }
 </script>
 </body>
